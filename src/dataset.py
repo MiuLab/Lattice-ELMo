@@ -24,7 +24,10 @@ class SLUDataset(Dataset):
         with open(filename) as csvfile:
             reader = csv.DictReader(csvfile)
             self.data = [row for row in reader]
-        self.id2idx = {row["id"]: i for i, row in enumerate(self.data)}
+
+        if "id" in self.data[0]:
+            self.id2idx = {row["id"]: i for i, row in enumerate(self.data)}
+
         self.n_prev_turns = n_prev_turns
         if vocab_dump is None:
             self.vocab = Vocab(vocab_file)
@@ -86,17 +89,19 @@ class SLUDataset(Dataset):
 
 
 class SLULatticeDataset(Dataset):
-    label_idx = 5
+    label_idx = 6
 
     def __init__(self, filename, vocab_file=None,
                  vocab_dump=None, label_vocab_dump=None,
                  n_prev_turns=0, text_input=False):
+        self.text_input = text_input
         with open(filename) as csvfile:
             reader = csv.DictReader(csvfile)
             self.data = [row for row in reader]
             lattice_reader = LatticeReader(text_input=text_input)
             for i, row in enumerate(tqdm(self.data)):
                 row["lattice"] = lattice_reader.read_sent(row["text"], i)
+                row["rev_lattice"] = row["lattice"].reversed()
 
         self.id2idx = {row["id"]: i for i, row in enumerate(self.data)}
         self.n_prev_turns = n_prev_turns
@@ -125,42 +130,74 @@ class SLULatticeDataset(Dataset):
         text = re.sub(" ([a-z])\. ", " \\1 ", text)
         return text
 
+    def _get_prev_nodes(self, lattice):
+        prevs = []
+        for node in lattice.nodes:
+            prevs.append([
+                (n, np.exp(lattice.nodes[n].marginal_log_prob))
+                for n in node.nodes_prev
+            ])
+        return prevs
+
+    def _pad_prevs(self, prevs, max_length, pad_type="post"):
+        def shift_index(prev):
+            shift = max_length - len(prev)
+            return [
+                [(idx+shift, prob) for idx, prob in p] if len(p) > 0 else [(-1, 1.0)]
+                for p in prev
+            ]
+
+        if pad_type == "post":
+            prevs = [
+                prev + [[(-1, 1.0)] for _ in range(max_length-len(prev))]
+                for prev in prevs
+            ]
+        elif pad_type == "pre":
+            prevs = [
+                [[(-1, 1.0)] for _ in range(max_length-len(prev))] + shift_index(prev)
+                for prev in prevs
+            ]
+        return prevs
+
     def collate_fn(self, batch):
-        inputs, words, positions, prevs, nexts, labels = [], [], [], [], [], []
+        inputs, words, positions, prevs = [], [], [], []
+        rev_inputs, rev_prevs, labels = [], [], []
         for utt in batch:
-            text = " ".join(utt['lattice'].str_tokens())
-            label = utt["label"]
-            prev = []
-            next = []
-            for node in utt['lattice'].nodes:
-                prev.append([
-                    (n, np.exp(utt['lattice'].nodes[n].marginal_log_prob))
-                    for n in node.nodes_prev
-                ])
-                next.append([
-                    (n, np.exp(utt['lattice'].nodes[n].fwd_log_prob))
-                    for n in node.nodes_next
-                ])
+            text = " ".join(utt["lattice"].str_tokens())
             word_ids = [self.vocab.w2i(word) for word in text.split()]
+            prev = self._get_prev_nodes(utt["lattice"])
+            rev_text = " ".join(utt["rev_lattice"].str_tokens())
+            rev_word_ids = [self.vocab.w2i(word) for word in rev_text.split()]
+            rev_prev = self._get_prev_nodes(utt["rev_lattice"])
+            if self.text_input:
+                text = " ".join(text.split()[1:-1])
+                word_ids = word_ids[1:-1]
+                prev = [
+                    [(idx-1, prob) for idx, prob in p]
+                    for p in prev[1:-1]
+                ]
+                rev_text = " ".join(rev_text.split()[1:-1])
+                rev_word_ids = rev_word_ids[1:-1]
+                rev_prev = [
+                    [(idx-1, prob) for idx, prob in p]
+                    for p in rev_prev[1:-1]
+                ]
+            label = utt["label"]
             words.append(text.split())
             inputs.append(word_ids)
             positions.append([0, len(word_ids)])
             prevs.append(prev)
-            nexts.append(next)
+            rev_inputs.append(rev_word_ids)
+            rev_prevs.append(rev_prev)
             labels.append(self.label_vocab.l2i(label))
 
         max_length = max(map(len, inputs))
         inputs = pad_sequences(inputs, max_length)
-        prevs = [
-            prev + [[(-1, 0.0)] for _ in range(max_length-len(prev))]
-            for prev in prevs
-        ]
-        nexts = [
-            next + [[(-1, 0.0)] for _ in range(max_length-len(next))]
-            for next in nexts
-        ]
+        rev_inputs = pad_sequences(rev_inputs, max_length, "pre")
+        prevs = self._pad_prevs(prevs, max_length)
+        rev_prevs = self._pad_prevs(rev_prevs, max_length, "pre")
         labels = np.array(labels)
-        return inputs, words, positions, prevs, nexts, labels
+        return inputs, words, positions, prevs, rev_inputs, rev_prevs, labels
 
 
 class LabelVocab:

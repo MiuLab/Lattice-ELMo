@@ -18,7 +18,7 @@ import model_utils
 from utils import print_time_info
 from vocabulary import BOS, PAD
 from model_utils import build_optimizer, get_device
-from modules import ELMoLM
+from modules import ELMoLM, LatticeElmo
 
 from sklearn.metrics import classification_report
 from tqdm import tqdm
@@ -39,7 +39,11 @@ class SLU:
         if self.use_elmo:
             option_file = config["elmo"]["option_file"]
             weight_file = config["elmo"]["weight_file"]
-            self.elmo = Elmo(option_file, weight_file, 1, dropout=0)
+            if config["elmo"].get("lattice", False):
+                combine_method = config["elmo"].get("combine_method", "weighted-sum")
+                self.elmo = LatticeElmo(option_file, weight_file, 1, dropout=0, combine_method=combine_method)
+            else:
+                self.elmo = Elmo(option_file, weight_file, 1, dropout=0)
             self.slu.elmo_scalar_mixes = nn.ModuleList(self.elmo._scalar_mixes)
 
             if len(config["elmo"].get("checkpoint", "")) > 0:
@@ -180,7 +184,10 @@ class SLU:
         else:
             self.slu.train()
 
-        inputs, words, positions, labels = batch
+        if len(batch) == 4:
+            inputs, words, positions, labels = batch
+        else:
+            inputs, words, positions, _, _, _, labels = batch
 
         inputs = torch.from_numpy(inputs).to(self.device)
         labels = torch.from_numpy(labels).to(self.device)
@@ -208,17 +215,22 @@ class SLU:
         else:
             self.slu.train()
 
-        inputs, words, positions, prevs, nexts, labels = batch
+        inputs, words, positions, prevs, rev_inputs, rev_prevs, labels = batch
 
         inputs = torch.from_numpy(inputs).to(self.device)
+        rev_inputs = torch.from_numpy(rev_inputs).to(self.device)
         labels = torch.from_numpy(labels).to(self.device)
 
         elmo_emb = None
         if self.use_elmo:
             char_ids = batch_to_ids(words).to(self.device)
-            elmo_emb = self.elmo(char_ids)['elmo_representations'][0]
+            elmo_emb = self.elmo(
+                char_ids, prevs=prevs, rev_prevs=rev_prevs
+            )['elmo_representations'][0]
 
-        logits = self.slu(inputs, positions, prevs, nexts, elmo_emb)
+        print(inputs.size())
+        print(elmo_emb.size())
+        logits = self.slu(inputs, positions, prevs, rev_inputs, rev_prevs, elmo_emb)
 
         loss = F.cross_entropy(logits, labels)
 

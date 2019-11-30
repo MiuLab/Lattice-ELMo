@@ -4,6 +4,7 @@ import json
 import os
 import ipdb
 import pickle
+import random
 
 import numpy as np
 import torch
@@ -131,6 +132,13 @@ def test(args):
 
 
 if __name__ == "__main__":
+    """
+    random.seed(0)
+    np.random.seed(0)
+    torch.manual_seed(0)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    """
     args = get_args()
     with ipdb.launch_ipdb_on_exception():
         sys.breakpointhook = ipdb.set_trace
