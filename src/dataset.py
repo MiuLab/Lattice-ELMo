@@ -10,7 +10,7 @@ from torch.utils.data import Dataset
 from tqdm import tqdm
 
 from vocabulary import Vocab, PAD
-from model_utils import pad_sequences, index_to_nhot
+from model_utils import pad_sequences, pad_matrices, index_to_nhot
 from utils import print_time_info
 from lattice_utils import LatticeReader
 
@@ -169,19 +169,7 @@ class SLULatticeDataset(Dataset):
             rev_text = " ".join(utt["rev_lattice"].str_tokens())
             rev_word_ids = [self.vocab.w2i(word) for word in rev_text.split()]
             rev_prev = self._get_prev_nodes(utt["rev_lattice"])
-            if self.text_input:
-                text = " ".join(text.split()[1:-1])
-                word_ids = word_ids[1:-1]
-                prev = [
-                    [(idx-1, prob) for idx, prob in p]
-                    for p in prev[1:-1]
-                ]
-                rev_text = " ".join(rev_text.split()[1:-1])
-                rev_word_ids = rev_word_ids[1:-1]
-                rev_prev = [
-                    [(idx-1, prob) for idx, prob in p]
-                    for p in rev_prev[1:-1]
-                ]
+
             label = utt["label"]
             words.append(text.split())
             inputs.append(word_ids)
@@ -356,6 +344,120 @@ class LMDataset(Dataset):
         outputs_rev = pad_sequences(outputs_rev, max_length, 'post')
 
         return inputs, outputs, outputs_rev, uids
+
+
+class LMLatticeDataset(Dataset):
+    def __init__(self, filename, vocab_file=None,
+                 vocab_dump=None, text_input=False):
+        self.text_input = text_input
+        with open(filename) as csvfile:
+            reader = csv.DictReader(csvfile)
+            self.data = [row for row in reader]
+            lattice_reader = LatticeReader(text_input=text_input)
+            for i, row in enumerate(tqdm(self.data)):
+                row["lattice"] = lattice_reader.read_sent(row["text"], i)
+                row["rev_lattice"] = row["lattice"].reversed()
+
+        if vocab_dump is None:
+            self.vocab = Vocab(vocab_file)
+        else:
+            with open(vocab_dump, 'rb') as fp:
+                self.vocab = pickle.load(fp)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, index):
+        return self.data[index]
+
+    def _process_text(self, text):
+        for punct in [',', '.', '?', '!']:
+            if text.endswith(f" {punct}"):
+                text = text[:-2]
+        text = re.sub(" ([a-z])\. ", " \\1 ", text)
+        return text
+
+    def _get_prev_nodes(self, lattice):
+        prevs = []
+        for node in lattice.nodes:
+            if len(node.nodes_prev) == 0:
+                prev_prob_sum = 1.0
+            else:
+                prev_prob_sum = sum([np.exp(lattice.nodes[n].marginal_log_prob) for n in node.nodes_prev])
+            prevs.append([
+                (n, np.exp(lattice.nodes[n].marginal_log_prob) / prev_prob_sum)
+                for n in node.nodes_prev
+            ])
+        return prevs
+
+    def _get_lm_labels(self, lattice):
+        probs = []
+        mask = []
+        tokens = lattice.str_tokens()
+        for node in lattice.nodes:
+            if len(node.nodes_next) == 0:
+                next_prob_sum = 1.0
+            else:
+                next_prob_sum = sum([np.exp(lattice.nodes[n].marginal_log_prob) for n in node.nodes_next])
+            prob = np.zeros(len(self.vocab.vocab))
+            for n in node.nodes_next:
+                wid = self.vocab.w2i(tokens[n])
+                prob[wid] = np.exp(lattice.nodes[n].marginal_log_prob) / next_prob_sum
+            probs.append(prob)
+            mask.append(1 if len(node.nodes_next) >= 1 else 0)
+        return np.array(probs), np.array(mask)
+
+    def _pad_prevs(self, prevs, max_length, pad_type="post"):
+        def shift_index(prev):
+            shift = max_length - len(prev)
+            return [
+                [(idx+shift, prob) for idx, prob in p] if len(p) > 0 else [(-1, 1.0)]
+                for p in prev
+            ]
+
+        if pad_type == "post":
+            prevs = [
+                prev + [[(-1, 1.0)] for _ in range(max_length-len(prev))]
+                for prev in prevs
+            ]
+        elif pad_type == "pre":
+            prevs = [
+                [[(-1, 1.0)] for _ in range(max_length-len(prev))] + shift_index(prev)
+                for prev in prevs
+            ]
+        return prevs
+
+    def collate_fn(self, batch):
+        inputs, words, positions, prevs = [], [], [], []
+        rev_inputs, rev_prevs, lm_labels, rev_lm_labels = [], [], [], []
+        lm_masks, rev_lm_masks = [], []
+        for utt in batch:
+            text = " ".join(utt["lattice"].str_tokens())
+            word_ids = [self.vocab.w2i(word) for word in text.split()]
+            prev = self._get_prev_nodes(utt["lattice"])
+            lm_label, lm_mask = self._get_lm_labels(utt["lattice"])
+            rev_text = " ".join(utt["rev_lattice"].str_tokens())
+            rev_word_ids = [self.vocab.w2i(word) for word in rev_text.split()]
+            rev_prev = self._get_prev_nodes(utt["rev_lattice"])
+            rev_lm_label, rev_lm_mask = self._get_lm_labels(utt["rev_lattice"])
+
+            words.append(text.split())
+            positions.append([0, len(word_ids)])
+            prevs.append(prev)
+            lm_labels.append(lm_label)
+            lm_masks.append(lm_mask)
+            rev_prevs.append(rev_prev)
+            rev_lm_labels.append(rev_lm_label)
+            rev_lm_masks.append(rev_lm_mask)
+
+        max_length = max(map(len, lm_labels))
+        prevs = self._pad_prevs(prevs, max_length)
+        rev_prevs = self._pad_prevs(rev_prevs, max_length, "pre")
+        lm_labels = pad_matrices(lm_labels, max_length)
+        rev_lm_labels = pad_matrices(rev_lm_labels, max_length, "pre")
+        lm_masks = pad_matrices(lm_masks, max_length)
+        rev_lm_masks = pad_matrices(rev_lm_masks, max_length, "pre")
+        return words, positions, prevs, rev_prevs, lm_labels, rev_lm_labels, lm_masks, rev_lm_masks
 
 
 if __name__ == "__main__":

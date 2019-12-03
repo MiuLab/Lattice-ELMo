@@ -5,6 +5,7 @@ import os
 import ipdb
 import pickle
 import random
+import csv
 
 import numpy as np
 import torch
@@ -28,6 +29,7 @@ def get_args():
     parser.add_argument('--epoch', type=int, default=None)
     parser.add_argument('--finetune', action='store_true')
     parser.add_argument('--test', action='store_true')
+    parser.add_argument('--best_valid', action='store_true')
     parser.add_argument('-v', '--verbose', action='store_true')
     parser.add_argument('--test_file', type=str, default="")
     args = parser.parse_args()
@@ -119,6 +121,13 @@ def test(args):
     if args.epoch is not None:
         print_time_info("Loading checkpoint {} from model_dir".format(args.epoch))
         epoch = model.load_model(args.model_dir, args.epoch)
+    elif args.best_valid:
+        with open(f"{args.model_dir}/log.csv") as csv_file:
+            reader = csv.DictReader(csv_file)
+            log = list(reader)
+            epoch = int(sorted(log, key=lambda x:x['valid_f1'], reverse=True)[0]['epoch'])
+        print_time_info("Loading best validation checkpoint {} from model_dir".format(epoch))
+        epoch = model.load_model(args.model_dir, epoch)
     else:
         print_time_info("Loading last checkpoint from model_dir")
         epoch = model.load_model(args.model_dir)

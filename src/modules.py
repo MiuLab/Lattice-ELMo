@@ -1,19 +1,31 @@
 import random
 import math
 import time
+import logging
+import json
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
-from typing import Optional, Tuple, List, Union
+from typing import Optional, Tuple, List, Union, Dict, Any, Callable
 
+from torch.nn.modules import Dropout
+from torch.nn.utils.rnn import PackedSequence, pad_packed_sequence, pack_padded_sequence
+from allennlp.modules.scalar_mix import ScalarMix
 from allennlp.modules.elmo import _ElmoBiLm as ElmoBiLm
 from allennlp.modules.elmo import Elmo, _ElmoCharacterEncoder
 from allennlp.modules.elmo_lstm import ElmoLstm
 from allennlp.modules.lstm_cell_with_projection import LstmCellWithProjection
+from allennlp.nn.util import get_lengths_from_binary_sequence_mask, sort_batch_by_length
 from allennlp.nn.util import remove_sentence_boundaries
+from allennlp.common.checks import ConfigurationError
+from allennlp.common.file_utils import cached_path
+from allennlp.nn.util import get_dropout_mask
+
+RnnState = Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]
+logger = logging.getLogger(__name__)
 
 
 class RNNModel(nn.Module):
@@ -300,6 +312,7 @@ class SLULatticeRNN(RNNModel):
                 rev_inputs = self.embedding(rev_inputs)
         else:
             inputs = elmo_emb
+            rev_inputs = elmo_emb
 
         device = inputs.device
         # inputs = self.dropout(inputs, self.dropout_embedding)
@@ -369,6 +382,31 @@ class ELMoLM(nn.Module):
         return logits_forward, logits_backward, representations, mask
 
 
+class LatticeELMoLM(nn.Module):
+    def __init__(self, option_file, weight_file, vocab_size, combine_method="weighted-sum"):
+        super().__init__()
+        self.elmo = _LatticeElmoBiLm(option_file, weight_file, requires_grad=True, combine_method=combine_method)
+        self.output_dim = self.elmo.get_output_dim()
+        self.output_dim_half = self.output_dim // 2
+        self.decoder = nn.Linear(self.output_dim_half, vocab_size)
+
+    def forward(self, inputs, prevs, rev_prevs):
+        bilm_output = self.elmo(inputs, prevs=prevs, rev_prevs=rev_prevs)
+        representations = bilm_output['activations']
+
+        """
+        representations = []
+        for representation in layer_activations:
+            r, mask = remove_sentence_boundaries(representation, mask_with_bos_eos)
+            representations.append(r)
+        """
+        repr_forward, repr_backward = representations[-1].split(self.output_dim_half, dim=2)
+        logits_forward = self.decoder(repr_forward)
+        logits_backward = self.decoder(repr_backward)
+
+        return logits_forward, logits_backward, representations
+
+
 class LatticeElmo(Elmo):
     def __init__(
         self,
@@ -379,7 +417,7 @@ class LatticeElmo(Elmo):
         do_layer_norm: bool = False,
         dropout: float = 0.5,
         vocab_to_cache: List[str] = None,
-        keep_sentence_boundaries: bool = False,
+        keep_sentence_boundaries: bool = True,
         scalar_mix_parameters: List[float] = None,
         module: torch.nn.Module = None,
         combine_method = "weighted-sum"
@@ -508,6 +546,14 @@ class _LatticeElmoBiLm(ElmoBiLm):
         self, inputs: torch.Tensor, word_inputs: torch.Tensor = None,
         prevs=None, rev_prevs=None
     ) -> Dict[str, Union[torch.Tensor, List[torch.Tensor]]]:
+        # discard the original <s> </s> tokens in lattices
+        padding = inputs.new_zeros(inputs.size(-1))
+        mask = ((inputs > 0).long().sum(dim=-1) > 0).long()
+        sequence_lengths = mask.sum(dim=1).detach().cpu().numpy()
+        for i, l in enumerate(sequence_lengths):
+            inputs[i, l-1] = padding
+        inputs = inputs[:, 1:-1]
+
         token_embedding = self._token_embedder(inputs)
         mask = token_embedding["mask"]
         type_representation = token_embedding["token_embedding"]
@@ -523,7 +569,7 @@ class _LatticeElmoBiLm(ElmoBiLm):
         return {"activations": output_tensors, "mask": mask}
 
 
-class LatticeELMoLstm(ElmoLstm):
+class LatticeElmoLstm(ElmoLstm):
     def __init__(self,
                 input_size: int,
                 hidden_size: int,
@@ -877,12 +923,13 @@ class LatticeLstmCellWithProjection(LstmCellWithProjection):
                 ):
                     current_length_index += 1
 
-            # previous_memory = full_batch_previous_memory[0 : current_length_index + 1].clone()
-            previous_memory, previous_state = self.get_pooled_states(
-                timestep, prevs, hs, cs, current_length_index)
-            # Shape (batch_size, hidden_size)
-            # previous_state = full_batch_previous_state[0 : current_length_index + 1].clone()
-            # Shape (batch_size, input_size)
+            if timestep != 0:
+                previous_memory, previous_state = self.get_pooled_states(
+                    timestep, prevs, hs, cs, current_length_index)
+            else:
+                previous_memory = full_batch_previous_memory[0 : current_length_index + 1].clone()
+                previous_state = full_batch_previous_state[0 : current_length_index + 1].clone()
+
             timestep_input = inputs[0 : current_length_index + 1, index]
 
             projected_input = self.input_linearity(timestep_input)

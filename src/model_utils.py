@@ -20,6 +20,21 @@ def pad_sequences(data, max_length, pad_type="post"):
     return padded_data
 
 
+def pad_matrices(data, max_length, pad_type="post"):
+    shape = (len(data), max_length) + tuple(data[0][0].shape)
+    padded_data = np.zeros(shape)
+
+    if pad_type == "post":
+        for idx, d in enumerate(data):
+            padded_data[idx][:min(max_length, len(d))] = \
+                    d[:min(max_length, len(d))]
+    elif pad_type == "pre":
+        for idx, d in enumerate(data):
+            padded_data[idx][max(0, max_length-len(d)):] = \
+                    d[:min(max_length, len(d))]
+    return padded_data
+
+
 def index_to_nhot(data, vocab_size):
     matrix = np.zeros((len(data), vocab_size), dtype=np.float32)
     for i, item in enumerate(data):

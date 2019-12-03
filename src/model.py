@@ -18,7 +18,7 @@ import model_utils
 from utils import print_time_info
 from vocabulary import BOS, PAD
 from model_utils import build_optimizer, get_device
-from modules import ELMoLM, LatticeElmo
+from modules import ELMoLM, LatticeELMoLM, LatticeElmo
 
 from sklearn.metrics import classification_report
 from tqdm import tqdm
@@ -164,6 +164,7 @@ class SLU:
             metrics = classification_report(
                 np.array(all_y_true),
                 np.array(all_y_pred),
+                labels=list(range(len(data_engine.label_vocab.vocab))),
                 target_names=data_engine.label_vocab.vocab,
                 digits=3)
             print(metrics)
@@ -228,8 +229,6 @@ class SLU:
                 char_ids, prevs=prevs, rev_prevs=rev_prevs
             )['elmo_representations'][0]
 
-        print(inputs.size())
-        print(elmo_emb.size())
         logits = self.slu(inputs, positions, prevs, rev_inputs, rev_prevs, elmo_emb)
 
         loss = F.cross_entropy(logits, labels)
@@ -284,7 +283,11 @@ class LM:
         self.vocab_size = config["vocab_size"]
         option_file = config["elmo"]["option_file"]
         weight_file = config["elmo"]["weight_file"]
-        self.lm = ELMoLM(option_file, weight_file, self.vocab_size)
+        if config["elmo"].get("lattice", False):
+            combine_method = config["elmo"].get("combine_method", "weighted-sum")
+            self.lm = LatticeELMoLM(option_file, weight_file, self.vocab_size, combine_method=combine_method)
+        else:
+            self.lm = ELMoLM(option_file, weight_file, self.vocab_size)
         self.lm.to(self.device)
 
     def prepare_training(self, batch_size, data_engine, collate_fn):
@@ -427,6 +430,40 @@ class LM:
         outputs_rev = outputs_rev.view(-1)
         loss_for = F.cross_entropy(logits_forward, outputs, ignore_index=PAD)
         loss_rev = F.cross_entropy(logits_backward, outputs_rev, ignore_index=PAD)
+
+        loss = (loss_for + loss_rev) / 2
+        if not testing:
+            self.optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.parameters, 0.25)
+            self.optimizer.step()
+
+        return loss_for, loss_rev, torch.tensor(0.0), torch.tensor(0.0)
+
+    def run_batch_lattice(self, batch, testing=False):
+        if testing:
+            self.lm.eval()
+        else:
+            self.lm.train()
+
+        inputs, positions, prevs, rev_prevs, lm_labels, rev_lm_labels, lm_masks, rev_lm_masks = batch
+        char_ids = batch_to_ids(inputs).to(self.device)
+        lm_labels = torch.from_numpy(lm_labels).to(self.device)
+        rev_lm_labels = torch.from_numpy(rev_lm_labels).to(self.device)
+        lm_masks = torch.from_numpy(lm_masks).float().to(self.device).view(-1)
+        rev_lm_masks = torch.from_numpy(rev_lm_masks).float().to(self.device).flip(dims=[1]).view(-1)
+
+        logits_forward, logits_backward, hiddens = self.lm(char_ids, prevs, rev_prevs)
+
+        bs, sl, vs = logits_forward.size()
+        logits_forward = logits_forward.view(-1, vs).log_softmax(-1)
+        logits_backward = logits_backward.view(-1, vs).log_softmax(-1)
+        lm_labels = lm_labels.view(-1, vs).float()
+        rev_lm_labels = rev_lm_labels.flip(dims=[1]).view(-1, vs).float()
+        loss_for = F.kl_div(logits_forward, lm_labels, reduction='none')
+        loss_for = (loss_for.sum(-1) * lm_masks).sum() / lm_masks.sum()
+        loss_rev = F.kl_div(logits_backward, rev_lm_labels, reduction='none')
+        loss_rev = (loss_rev.sum(-1) * rev_lm_masks).sum() / rev_lm_masks.sum()
 
         loss = (loss_for + loss_rev) / 2
         if not testing:
