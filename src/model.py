@@ -39,11 +39,14 @@ class SLU:
         if self.use_elmo:
             option_file = config["elmo"]["option_file"]
             weight_file = config["elmo"]["weight_file"]
+            random_init = config["elmo"].get("random_init", False)
             if config["elmo"].get("lattice", False):
                 combine_method = config["elmo"].get("combine_method", "weighted-sum")
-                self.elmo = LatticeElmo(option_file, weight_file, 1, dropout=0, combine_method=combine_method)
+                self.elmo = LatticeElmo(option_file, weight_file, 1, dropout=0, 
+                                        combine_method=combine_method, 
+                                        random_init=random_init)
             else:
-                self.elmo = Elmo(option_file, weight_file, 1, dropout=0)
+                self.elmo = Elmo(option_file, weight_file, 1, dropout=0, random_init=random_init)
             self.slu.elmo_scalar_mixes = nn.ModuleList(self.elmo._scalar_mixes)
 
             if len(config["elmo"].get("checkpoint", "")) > 0:
@@ -283,11 +286,13 @@ class LM:
         self.vocab_size = config["vocab_size"]
         option_file = config["elmo"]["option_file"]
         weight_file = config["elmo"]["weight_file"]
+        random_init = config["elmo"].get("random_init", False)
         if config["elmo"].get("lattice", False):
             combine_method = config["elmo"].get("combine_method", "weighted-sum")
-            self.lm = LatticeELMoLM(option_file, weight_file, self.vocab_size, combine_method=combine_method)
+            self.lm = LatticeELMoLM(option_file, weight_file, self.vocab_size,
+                                    combine_method=combine_method, random_init=random_init)
         else:
-            self.lm = ELMoLM(option_file, weight_file, self.vocab_size)
+            self.lm = ELMoLM(option_file, weight_file, self.vocab_size, random_init=random_init)
         self.lm.to(self.device)
 
     def prepare_training(self, batch_size, data_engine, collate_fn):

@@ -383,9 +383,14 @@ class ELMoLM(nn.Module):
 
 
 class LatticeELMoLM(nn.Module):
-    def __init__(self, option_file, weight_file, vocab_size, combine_method="weighted-sum"):
+    def __init__(self, option_file, weight_file, vocab_size,
+                 combine_method="weighted-sum",
+                 random_init=False):
         super().__init__()
-        self.elmo = _LatticeElmoBiLm(option_file, weight_file, requires_grad=True, combine_method=combine_method)
+        self.elmo = _LatticeElmoBiLm(option_file, weight_file,
+                                     requires_grad=True,
+                                     combine_method=combine_method,
+                                     random_init=random_init)
         self.output_dim = self.elmo.get_output_dim()
         self.output_dim_half = self.output_dim // 2
         self.decoder = nn.Linear(self.output_dim_half, vocab_size)
@@ -420,7 +425,8 @@ class LatticeElmo(Elmo):
         keep_sentence_boundaries: bool = True,
         scalar_mix_parameters: List[float] = None,
         module: torch.nn.Module = None,
-        combine_method = "weighted-sum"
+        combine_method = "weighted-sum",
+        random_init = False
     ) -> None:
         super(Elmo, self).__init__()
 
@@ -430,7 +436,8 @@ class LatticeElmo(Elmo):
             weight_file,
             requires_grad=requires_grad,
             vocab_to_cache=vocab_to_cache,
-            combine_method=combine_method
+            combine_method=combine_method,
+            random_init=random_init
         )
         self._has_cached_vocab = vocab_to_cache is not None
         self._keep_sentence_boundaries = keep_sentence_boundaries
@@ -509,7 +516,8 @@ class _LatticeElmoBiLm(ElmoBiLm):
         weight_file: str,
         requires_grad: bool = False,
         vocab_to_cache: List[str] = None,
-        combine_method = "weighted-sum"
+        combine_method = "weighted-sum",
+        random_init = False
     ) -> None:
         super(ElmoBiLm, self).__init__()
 
@@ -538,7 +546,11 @@ class _LatticeElmoBiLm(ElmoBiLm):
             requires_grad=requires_grad,
             combine_method=combine_method
         )
-        self._elmo_lstm.load_weights(weight_file)
+
+        if not random_init:
+            self._elmo_lstm.load_weights(weight_file)
+        else:
+            print("WARNING!!! ELMo weights will not be loaded!!!")
         # Number of representation layers including context independent layer
         self.num_layers = options["lstm"]["n_layers"] + 1
 
