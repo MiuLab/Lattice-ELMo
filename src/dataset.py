@@ -88,6 +88,58 @@ class SLUDataset(Dataset):
         return inputs, words, positions, labels
 
 
+class PairDataset(Dataset):
+    label_idx = 3
+
+    def __init__(self, filename, vocab_file=None,
+                 vocab_dump=None, label_vocab_dump=None):
+        with open(filename) as csvfile:
+            reader = csv.DictReader(csvfile)
+            self.data = [row for row in reader]
+
+        if vocab_dump is None:
+            self.vocab = Vocab(vocab_file)
+        else:
+            with open(vocab_dump, 'rb') as fp:
+                self.vocab = pickle.load(fp)
+        if label_vocab_dump is None:
+            labels = [row["label"] for row in self.data]
+            self.label_vocab = LabelVocab(labels)
+        else:
+            with open(label_vocab_dump, 'rb') as fp:
+                self.label_vocab = pickle.load(fp)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, index):
+        return self.data[index]
+
+    def _process_text(self, text):
+        for punct in [',', '.', '?', '!']:
+            if text.endswith(f" {punct}"):
+                text = text[:-2]
+        text = re.sub(" ([a-z])\. ", " \\1 ", text)
+        return text
+
+    def collate_fn(self, batch):
+        inputs, words, positions, labels = [], [], [], []
+        for utt in batch:
+            text = self._process_text(utt["text"] + " " + utt["text2"])
+            text = " ".join(text)
+            label = utt["label"]
+            word_ids = [self.vocab.w2i(word) for word in text.split()]
+            words.append(text.split())
+            inputs.append(word_ids)
+            positions.append([0, len(word_ids)])
+            labels.append(self.label_vocab.l2i(label))
+
+        max_length = max(map(len, inputs))
+        inputs = pad_sequences(inputs, max_length)
+        labels = np.array(labels)
+        return inputs, words, positions, labels
+
+
 class SLULatticeDataset(Dataset):
     label_idx = 6
 

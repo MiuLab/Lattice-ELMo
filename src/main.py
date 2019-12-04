@@ -13,13 +13,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from utils import print_time_info
-from dataset import SLUDataset, SLULatticeDataset
+from dataset import SLUDataset, SLULatticeDataset, PairDataset
 from model import SLU
 
 
 DATASETS = {
     'text': SLUDataset,
-    'lattice': SLULatticeDataset
+    'lattice': SLULatticeDataset,
+    'pair': PairDataset
 }
 
 
@@ -56,7 +57,6 @@ def train(args):
         config["train_file"],
         vocab_file=config["vocab_file"],
         label_vocab_dump=config.get("label_vocab_dump", None),
-        n_prev_turns=config.get("n_prev_turns", 0),
         **(config.get("dataset_args", {})))
 
     vocab_dump_path = os.path.join(args.model_dir, "vocab.pkl")
@@ -70,7 +70,6 @@ def train(args):
         config["valid_file"],
         vocab_dump=vocab_dump_path,
         label_vocab_dump=label_vocab_dump_path,
-        n_prev_turns=config.get("n_prev_turns", 0),
         **(config.get("dataset_args", {})))
 
     test_dataset = None
@@ -79,7 +78,6 @@ def train(args):
             args.test_file,
             vocab_dump=vocab_dump_path,
             label_vocab_dump=label_vocab_dump_path,
-            n_prev_turns=config.get("n_prev_turns", 0),
             **(config.get("dataset_args", {})))
 
     config["model"]["vocab_size"] = len(train_dataset.vocab)
@@ -111,7 +109,6 @@ def test(args):
         test_file,
         vocab_dump=vocab_dump_path,
         label_vocab_dump=label_vocab_dump_path,
-        n_prev_turns=config.get("n_prev_turns", 0),
         **(config.get("dataset_args", {})))
 
     config["model"]["vocab_size"] = len(test_dataset.vocab)
