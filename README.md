@@ -1,5 +1,5 @@
 # Learning Spoken Language Representations with Neural Lattice Language Modeling
-[Paper](https://www.csie.ntu.edu.tw/~yvchen/doc/ACL20_LatticeLM.pdf)
+[Paper](https://www.aclweb.org/anthology/2020.acl-main.347/)
 | [Slides](https://www.csie.ntu.edu.tw/~yvchen/doc/ACL20_LatticeLM_slide.pdf)
 
 Source code for our ACL 2020 paper *Learning Spoken Language Representations with Neural Lattice Language Modeling*
