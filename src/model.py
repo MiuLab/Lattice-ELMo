@@ -46,7 +46,7 @@ class SLU:
                                         combine_method=combine_method, 
                                         random_init=random_init)
             else:
-                self.elmo = Elmo(option_file, weight_file, 1, dropout=0, random_init=random_init)
+                self.elmo = Elmo(option_file, weight_file, 1, dropout=0)
             self.slu.elmo_scalar_mixes = nn.ModuleList(self.elmo._scalar_mixes)
 
             if len(config["elmo"].get("checkpoint", "")) > 0:

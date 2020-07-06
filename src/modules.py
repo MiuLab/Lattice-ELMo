@@ -312,7 +312,7 @@ class SLULatticeRNN(RNNModel):
                 rev_inputs = self.embedding(rev_inputs)
         else:
             inputs = elmo_emb
-            rev_inputs = elmo_emb
+            rev_inputs = elmo_emb.flip(dims=[1])
 
         device = inputs.device
         # inputs = self.dropout(inputs, self.dropout_embedding)

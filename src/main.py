@@ -33,6 +33,7 @@ def get_args():
     parser.add_argument('--best_valid', action='store_true')
     parser.add_argument('-v', '--verbose', action='store_true')
     parser.add_argument('--test_file', type=str, default="")
+    parser.add_argument('--text_input', action='store_true')
     args = parser.parse_args()
 
     return args
@@ -105,11 +106,16 @@ def test(args):
     label_vocab_dump_path = os.path.join(args.model_dir, "label_vocab.pkl")
 
     test_file = config["test_file"] if len(args.test_file) == 0 else args.test_file
+    dataset_args = config.get("dataset_args", {})
+    if args.text_input:
+        dataset_args["text_input"] = True
+
     test_dataset = dataset_cls(
         test_file,
         vocab_dump=vocab_dump_path,
         label_vocab_dump=label_vocab_dump_path,
-        **(config.get("dataset_args", {})))
+        **dataset_args
+    )
 
     config["model"]["vocab_size"] = len(test_dataset.vocab)
     config["model"]["label_vocab_size"] = len(test_dataset.label_vocab.vocab)

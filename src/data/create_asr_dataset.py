@@ -30,7 +30,7 @@ def read_trans(asr_file):
             key, text = line.strip().split(maxsplit=1)
         except ValueError:
             key, text = line.strip(), ""
-        processed[key] = text
+        processed[key] = text.lower()
 
     os.close(fd)
     os.remove(name)
@@ -84,7 +84,7 @@ def build(args):
         total += len(ans_trans.split())
         row["text"] = trans
         asr_dataset.append(row)
-
+    
     with open(args.output, 'w') as csvfile:
         writer = csv.DictWriter(
             csvfile,
@@ -92,7 +92,7 @@ def build(args):
         )
         writer.writeheader()
         writer.writerows(asr_dataset)
-
+    
     print(f"WER: {errors/total} ({errors}/{total})")
 
 
