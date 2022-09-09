@@ -1,4 +1,4 @@
-# Learning Spoken Language Representations with Neural Lattice Language Modeling
+# LatticeLM: Learning Spoken Language Representations with Neural Lattice Language Modeling
 [Paper](https://www.aclweb.org/anthology/2020.acl-main.347/)
 | [Slides](https://www.csie.ntu.edu.tw/~yvchen/doc/ACL20_LatticeLM_slide.pdf)
 
